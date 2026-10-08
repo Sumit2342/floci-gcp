@@ -219,6 +219,34 @@ class SqlDialectTranslatorTest {
     }
 
     @Test
+    void intervalExpressionStepSizesAreParenthesized() {
+        assertEquals("SELECT d + INTERVAL (-5) DAY AS f0_ FROM \"ds\".\"t\"", sql("SELECT d + INTERVAL -5 DAY FROM ds.t"));
+        assertEquals("SELECT d + INTERVAL (n * 2) HOUR AS \"d2\" FROM \"ds\".\"t\"", sql("SELECT d + INTERVAL n * 2 HOUR d2 FROM ds.t"));
+        assertEquals("SELECT CAST(d + INTERVAL (-x) DAY AS DATE) AS f0_ FROM \"ds\".\"t\"",
+                sql("SELECT DATE_ADD(d, INTERVAL -x DAY) FROM ds.t"));
+        assertEquals("SELECT CAST(d + INTERVAL (n + day) DAY AS DATE) AS f0_ FROM \"ds\".\"t\"",
+                sql("SELECT DATE_ADD(d, INTERVAL n + day DAY) FROM ds.t"));
+        assertEquals("SELECT d + INTERVAL (x) DAY AS \"day\" FROM \"ds\".\"t\"", sql("SELECT d + INTERVAL x DAY day FROM ds.t"));
+    }
+
+    @Test
+    void intervalParameterAndNestedStepSizesAreParenthesized() {
+        assertEquals("SELECT CAST(d + INTERVAL (CAST(5 AS BIGINT)) DAY AS DATE) AS \"a\","
+                + " CAST(d + INTERVAL (-CAST(5 AS BIGINT)) DAY AS DATE) AS \"b\" FROM \"ds\".\"t\"", SqlDialectTranslator.translate(
+                "SELECT DATE_ADD(d, INTERVAL @n DAY) a, DATE_ADD(d, INTERVAL -@n DAY) b FROM ds.t", "test-project", null,
+                new SqlDialectTranslator.QueryParameters(List.of(param("n", "INT64", "5")), "NAMED")).sql());
+        assertEquals("SELECT CAST(d + INTERVAL (-EXTRACT(DAY FROM CAST(d + INTERVAL (-1) DAY AS DATE))) DAY AS DATE)"
+                + " AS f0_ FROM \"ds\".\"t\"", sql("SELECT DATE_ADD(d, INTERVAL -EXTRACT(DAY FROM DATE_ADD(d, INTERVAL -1 DAY)) DAY) FROM ds.t"));
+    }
+
+    @Test
+    void intervalLiteralStepSizesStayAsTheyAre() {
+        assertEquals("SELECT d + INTERVAL 5 DAY AS f0_, d + INTERVAL '-5' DAY AS f1_, d + INTERVAL (-5) DAY AS f2_"
+                + " FROM \"ds\".\"t\"", sql("SELECT d + INTERVAL 5 DAY, d + INTERVAL '-5' DAY, d + INTERVAL (-5) DAY FROM ds.t"));
+        assertEquals("SELECT INTERVAL '1:2' HOUR TO MINUTE AS f0_ FROM \"ds\".\"t\"", sql("SELECT INTERVAL '1:2' HOUR TO MINUTE FROM ds.t"));
+    }
+
+    @Test
     void reservedWordsAreNotRewrittenIntoAliases() {
         assertEquals("SELECT 1 struct", sql("SELECT 1 struct"));
         assertEquals("SELECT 1 default", sql("SELECT 1 default"));

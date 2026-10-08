@@ -161,6 +161,7 @@ final class SqlDialectTranslator {
         stripTrailingSemicolons();
         rejectScripts();
         quoteOffsetIdentifiers();
+        parenthesizeIntervalValues();
     }
 
     /**
@@ -205,6 +206,47 @@ final class SqlDialectTranslator {
                 }
             }
             previous = t;
+        }
+    }
+
+    /**
+     * GoogleSQL takes any INT64 expression as an interval's step size ({@code INTERVAL -5 DAY},
+     * {@code INTERVAL n * 2 HOUR}); DuckDB only takes a bare literal there, so anything else is
+     * wrapped in parentheses: {@code INTERVAL (-5) DAY}.
+     */
+    private void parenthesizeIntervalValues() {
+        List<Integer> sig = significantIndexes();
+        List<Token> sigTokens = new ArrayList<>(sig.size());
+        for (int index : sig) {
+            sigTokens.add(tokens.get(index));
+        }
+        // Insertions are collected first and applied from the back, so a nested interval that also
+        // needs parentheses does not shift the positions computed for the outer one.
+        List<int[]> inserts = new ArrayList<>();
+        for (int k = 0; k < sigTokens.size(); k++) {
+            if (!sigTokens.get(k).isKeyword("INTERVAL")) {
+                continue;
+            }
+            int end = intervalEnd(sigTokens, k);
+            if (end < 0) {
+                continue;
+            }
+            int part = sigTokens.get(end - 1).isKeyword("TO") ? end - 2 : end;
+            int first = k + 1;
+            int last = part - 1;
+            Token value = sigTokens.get(first);
+            boolean literal = first == last && (value.kind == Kind.NUMBER || value.kind == Kind.STRING);
+            boolean grouped = value.isPunct("(") && closingParen(sigTokens, first) == last;
+            if (literal || grouped) {
+                continue;
+            }
+            inserts.add(new int[] {sig.get(first), 0});
+            inserts.add(new int[] {sig.get(last) + 1, 1});
+        }
+        inserts.sort((a, b) -> a[0] != b[0] ? Integer.compare(b[0], a[0]) : Integer.compare(a[1], b[1]));
+        for (int[] insert : inserts) {
+            String paren = insert[1] == 0 ? "(" : ")";
+            tokens.add(insert[0], new Token(Kind.PUNCT, paren, paren));
         }
     }
 
@@ -935,22 +977,55 @@ final class SqlDialectTranslator {
 
     private static boolean endsInsideInterval(List<Token> item) {
         for (int k = 0; k < item.size(); k++) {
-            if (!item.get(k).isKeyword("INTERVAL")) {
-                continue;
-            }
-            int end = k + 1;
-            if (end < item.size() && item.get(end).isPunct("(")) {
-                end = closingParen(item, end);
-            }
-            end++; // date part
-            if (end + 2 < item.size() && item.get(end + 1).isKeyword("TO")) {
-                end += 2;
-            }
-            if (end >= item.size() - 1) {
+            if (item.get(k).isKeyword("INTERVAL") && intervalEnd(item, k) >= item.size() - 1) {
                 return true;
             }
         }
         return false;
+    }
+
+    private static final Set<String> INTERVAL_PARTS = Set.of(
+            "YEAR", "QUARTER", "MONTH", "WEEK", "DAY", "HOUR", "MINUTE", "SECOND", "MILLISECOND", "MICROSECOND");
+
+    /**
+     * Index of the last token of the interval literal whose INTERVAL keyword is at {@code start}: its
+     * datetime part, or the ending part of a {@code TO} range. The step size before it may be any
+     * expression, so a datetime-part word only ends it when the token before can end an operand
+     * ({@code INTERVAL n + day DAY}: {@code day} is a column). -1 when no datetime part follows at the
+     * same nesting level; the scan stops at the next INTERVAL at that level, so repeated literals stay linear.
+     */
+    private static int intervalEnd(List<Token> sig, int start) {
+        int depth = 0;
+        for (int i = start + 1; i < sig.size(); i++) {
+            Token t = sig.get(i);
+            if (depth == 0 && t.isKeyword("INTERVAL")) {
+                return -1;
+            } else if (t.isPunct("(") || t.isPunct("[")) {
+                depth++;
+            } else if (t.isPunct(")") || t.isPunct("]")) {
+                if (--depth < 0) {
+                    return -1;
+                }
+            } else if (depth == 0 && i > start + 1 && isIntervalPart(t) && endsOperand(sig.get(i - 1))) {
+                return i + 2 < sig.size() && sig.get(i + 1).isKeyword("TO") && isIntervalPart(sig.get(i + 2))
+                        ? i + 2 : i;
+            } else if (depth == 0 && (t.isPunct(",") || t.isKeyword("FROM")
+                    || (t.kind == Kind.IDENT && CLAUSE_END_KEYWORDS.contains(t.upper())))) {
+                return -1;
+            }
+        }
+        return -1;
+    }
+
+    private static boolean endsOperand(Token t) {
+        return t.kind == Kind.NUMBER || t.kind == Kind.STRING || t.kind == Kind.QIDENT
+                || t.kind == Kind.NAMED_PARAM || t.kind == Kind.POSITIONAL_PARAM || t.isPunct(")")
+                || t.isPunct("]") || t.isKeyword("END")
+                || (t.kind == Kind.IDENT && !NON_ALIAS_KEYWORDS.contains(t.upper()));
+    }
+
+    private static boolean isIntervalPart(Token t) {
+        return t.kind == Kind.IDENT && INTERVAL_PARTS.contains(t.upper());
     }
 
     private static int closingParen(List<Token> item, int open) {

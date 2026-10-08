@@ -234,6 +234,39 @@ class BigQueryDuckIntegrationTest {
     }
 
     @Test
+    @Order(5)
+    void intervalStepSizeCanBeAnExpression() {
+        query("""
+                {"query": "SELECT DATE_ADD(DATE '2024-01-10', INTERVAL -5 DAY) minus, DATE_ADD(DATE '2024-01-10', INTERVAL - 5 DAY) spaced, DATE_ADD(DATE '2024-01-10', INTERVAL 2 * 3 DAY) product, DATE_ADD(DATE '2024-01-10', INTERVAL -x DAY) negated FROM UNNEST([2]) x", "useLegacySql": false}
+                """)
+                .then().statusCode(200)
+                .body("schema.fields.name", equalTo(List.of("minus", "spaced", "product", "negated")))
+                .body("rows[0].f.v", equalTo(List.of("2024-01-05", "2024-01-05", "2024-01-16", "2024-01-08")));
+        query("""
+                {"query": "SELECT DATE_ADD(DATE '2024-01-10', INTERVAL -1 QUARTER) q, DATE_ADD(DATE '2024-01-10', INTERVAL -1 WEEK) w, UNIX_MICROS(TIMESTAMP_ADD(TIMESTAMP '2024-01-10 00:00:00', INTERVAL -1 MILLISECOND)) ms, UNIX_MICROS(TIMESTAMP_ADD(TIMESTAMP '2024-01-10 00:00:00', INTERVAL -1 MICROSECOND)) us", "useLegacySql": false}
+                """)
+                .then().statusCode(200)
+                .body("rows[0].f.v", equalTo(List.of("2023-10-10", "2024-01-03", "1704844799999000", "1704844799999999")));
+        query("""
+                {"query": "SELECT DATE_ADD(DATE '2024-01-10', INTERVAL n + day DAY) FROM (SELECT 1 n, 2 day)", "useLegacySql": false}
+                """)
+                .then().statusCode(200)
+                .body("rows[0].f.v", equalTo(List.of("2024-01-13")));
+        query("""
+                {"query": "SELECT DATE_ADD(DATE '2024-01-10', INTERVAL @n DAY) a, DATE_ADD(DATE '2024-01-10', INTERVAL -@n DAY) b",
+                 "parameterMode": "NAMED", "useLegacySql": false,
+                 "queryParameters": [{"name": "n", "parameterType": {"type": "INT64"}, "parameterValue": {"value": "5"}}]}
+                """)
+                .then().statusCode(200)
+                .body("rows[0].f.v", equalTo(List.of("2024-01-15", "2024-01-05")));
+        query("""
+                {"query": "SELECT DATE_ADD(DATE '2024-01-10', INTERVAL -EXTRACT(DAY FROM DATE_ADD(DATE '2024-01-01', INTERVAL 1 DAY)) DAY) c, DATE_ADD(DATE '2024-01-10', INTERVAL -EXTRACT(DAY FROM DATE_ADD(DATE '2024-01-01', INTERVAL -1 DAY)) DAY) d", "useLegacySql": false}
+                """)
+                .then().statusCode(200)
+                .body("rows[0].f.v", equalTo(List.of("2024-01-08", "2023-12-10")));
+    }
+
+    @Test
     @Order(6)
     void dryRunReturnsSchemaWithoutAJob() {
         query("""
