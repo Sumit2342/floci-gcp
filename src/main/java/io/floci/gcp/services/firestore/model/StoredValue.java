@@ -7,6 +7,7 @@ import com.google.firestore.v1.Value;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.NullValue;
 import com.google.protobuf.Timestamp;
+import com.google.type.LatLng;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -60,6 +61,11 @@ public class StoredValue {
                 sv.type = "bytes";
                 sv.stringValue = Base64.getEncoder().encodeToString(v.getBytesValue().toByteArray());
             }
+            case GEO_POINT_VALUE -> {
+                sv.type = "geo_point";
+                LatLng geo = v.getGeoPointValue();
+                sv.stringValue = geo.getLatitude() + "," + geo.getLongitude();
+            }
             case REFERENCE_VALUE -> {
                 sv.type = "reference";
                 sv.stringValue = v.getReferenceValue();
@@ -99,6 +105,15 @@ public class StoredValue {
             case "bytes" -> {
                 if (stringValue != null) {
                     b.setBytesValue(ByteString.copyFrom(Base64.getDecoder().decode(stringValue)));
+                }
+            }
+            case "geo_point" -> {
+                if (stringValue != null) {
+                    String[] latLng = stringValue.split(",", 2);
+                    b.setGeoPointValue(LatLng.newBuilder()
+                            .setLatitude(Double.parseDouble(latLng[0]))
+                            .setLongitude(Double.parseDouble(latLng[1]))
+                            .build());
                 }
             }
             case "array" -> {
