@@ -3,6 +3,7 @@ package io.floci.gcp.services.bigquery;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.floci.gcp.core.common.GcpException;
 import io.floci.gcp.services.bigquery.model.ErrorProto;
+import io.floci.gcp.services.bigquery.model.TableCell;
 import io.floci.gcp.services.bigquery.model.TableFieldSchema;
 import io.floci.gcp.services.bigquery.model.TableSchema;
 import org.junit.jupiter.api.Test;
@@ -48,6 +49,26 @@ class RowCodecTest {
         assertEquals("{\"id\":10,\"name\":\"Alice\"}", storedJson(object, true));
         assertEquals("\"{\\\"looks\\\": \\\"like json\\\"}\"", storedJson("{\"looks\": \"like json\"}", true));
         assertEquals("[1,2]", storedJson(List.of(1, 2), true));
+    }
+
+    @Test
+    void nullRepeatedCellEncodesAsEmptyArray() {
+        TableFieldSchema tags = new TableFieldSchema();
+        tags.setName("tags");
+        tags.setType("STRING");
+        tags.setMode("REPEATED");
+        TableFieldSchema name = new TableFieldSchema();
+        name.setName("name");
+        name.setType("STRING");
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("tags", null);
+        row.put("name", null);
+
+        List<TableCell> cells = RowCodec.encodeRow(new TableSchema(List.of(tags, name)), row,
+                RowCodec.TimestampFormat.ISO8601_STRING).getF();
+
+        assertEquals(List.of(), cells.get(0).getV());
+        assertEquals(null, cells.get(1).getV());
     }
 
     @Test
